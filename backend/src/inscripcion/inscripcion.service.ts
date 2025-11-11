@@ -9,6 +9,25 @@ import { Departamento } from '../departamento/entities/departamento.entity';
 import { CorrelativasService } from '../correlativas/correlativas.service';
 import { InscripcionResponseDto } from './dto/inscripcion-response.dto';
 
+export interface MateriaDisponible {
+  id: number;
+  nombre: string;
+  descripcion: string;
+  comisiones: Array<{
+    id: number;
+    nombre: string;
+    cupoMaximo: number;
+    cupoDisponible: number;
+    docente: { nombre: string; apellido: string; } | null;
+    horarios: Array<{
+      dia: string;
+      horaInicio: string;
+      horaFin: string;
+      aula: string;
+    }>;
+  }>;
+}
+
 @Injectable()
 export class InscripcionService {
   constructor(
@@ -20,10 +39,37 @@ export class InscripcionService {
     private correlativasService: CorrelativasService,
   ) {}
 
+  // Obtener inscripciones activas de un estudiante
+  async getInscripcionesPorEstudiante(estudianteId: number) {
+    return this.inscripcionRepo.find({
+      where: { 
+        estudiante: { id: estudianteId },
+        stc: 'cursando' // Solo devolver inscripciones activas
+      },
+      relations: ['materia', 'comision', 'comision.horarios', 'comision.profesor']
+    });
+  }
+
   // Inscribirse a una materia
-  async inscribirse(userId: number, materiaId: number, comisionId?: number): Promise<InscripcionResponseDto> {
+  async inscribirse(userId: number, materiaId: number, comisionId: number): Promise<InscripcionResponseDto> {
+    // Verificar si el estudiante ya está inscripto en esta materia
+    const inscripcionExistente = await this.inscripcionRepo.findOne({
+      where: {
+        estudiante: { id: userId },
+        materia: { id: materiaId },
+        stc: 'cursando' // Solo verificar inscripciones activas
+      }
+    });
+
+    if (inscripcionExistente) {
+      throw new BadRequestException('Ya estás inscripto a esta materia');
+    }
+
     const estudiante = await this.userRepo.findOne({ where: { id: userId } });
-    const materia = await this.materiaRepo.findOne({ where: { id: materiaId }, relations: ['comisiones'] });
+    const materia = await this.materiaRepo.findOne({ 
+      where: { id: materiaId },
+      relations: ['comisiones', 'departamento', 'relacionesConPlanes.planEstudio.carrera']
+    });
 
     if (!estudiante || !materia) {
       throw new BadRequestException('Estudiante o materia no encontrados');
@@ -73,7 +119,7 @@ export class InscripcionService {
   }
 
   // Ver materias disponibles para inscripción
-  async materiasDisponibles(estudianteId: number) {
+  async materiasDisponibles(estudianteId: number): Promise<MateriaDisponible[]> {
     const estudiante = await this.userRepo.findOne({
       where: { id: estudianteId },
       relations: ['planEstudio'],
@@ -99,13 +145,43 @@ export class InscripcionService {
       .filter(i => ['cursando', 'aprobada'].includes(i.stc))
       .map(i => i.materia.id);
 
-    const disponibles = materiasDelPlan.filter(m => !materiasYaInscritas.includes(m.id));
+    // Filtrar materias disponibles y cargar sus comisiones
+    const disponibles: MateriaDisponible[] = [];
+    
+    for (const m of materiasDelPlan) {
+      if (!materiasYaInscritas.includes(m.id)) {
+        // Cargar las comisiones activas para esta materia
+        const comisiones = await this.comisionRepo.find({
+          where: { materia: { id: m.id } },
+          relations: ['horarios', 'profesor'],
+          order: { nombre: 'ASC' }
+        });
 
-    return disponibles.map(m => ({
-      id: m.id,
-      nombre: m.nombre,
-      descripcion: m.descripcion,
-    }));
+        disponibles.push({
+          id: m.id,
+          nombre: m.nombre,
+          descripcion: m.descripcion || '',
+          comisiones: comisiones.map(c => ({
+            id: c.id,
+            nombre: c.nombre,
+            cupoMaximo: c.cupoMaximo,
+            cupoDisponible: c.cupoMaximo - (c.inscripciones?.length || 0),
+            docente: c.profesor ? {
+              nombre: c.profesor.nombre,
+              apellido: c.profesor.apellido
+            } : null,
+            horarios: c.horarios?.map(h => ({
+              dia: h.dia,
+              horaInicio: h.horaInicio,
+              horaFin: h.horaFin,
+              aula: h.aula || ''
+            })) || []
+          }))
+        });
+      }
+    }
+
+    return disponibles;
   }
 
   // Ver detalle de una inscripción propia

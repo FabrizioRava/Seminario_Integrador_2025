@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Param, UseGuards, Request, UsePipes, ValidationPipe } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Get, Post, Param, UseGuards, Request, UsePipes, ValidationPipe, Body } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -36,8 +36,32 @@ export class InscripcionController {
   @ApiResponse({ status: 400, description: 'Datos inválidos o correlativas faltantes', type: ApiErrorResponseDto })
   @ApiResponse({ status: 401, description: 'No autorizado', type: ApiErrorResponseDto })
   @Post('materia/:materiaId')
-  async inscribirse(@Request() req, @Param('materiaId') materiaId: string) {
-    return this.inscripcionService.inscribirse(req.user.userId, +materiaId);
+  @ApiParam({ name: 'materiaId', type: Number })
+  @ApiBody({ 
+    schema: {
+      type: 'object',
+      properties: {
+        comisionId: { type: 'number' }
+      },
+      required: ['comisionId']
+    }
+  })
+  async inscribirse(
+    @Request() req, 
+    @Param('materiaId') materiaId: string,
+    @Body() body: { comisionId: number }
+  ) {
+    return this.inscripcionService.inscribirse(req.user.userId, +materiaId, body.comisionId);
+  }
+
+  @Get('mis-inscripciones')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ESTUDIANTE)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Obtener las inscripciones activas del estudiante' })
+  @ApiResponse({ status: 200, description: 'Lista de inscripciones activas', type: [InscripcionResponseDto] })
+  async getMisInscripciones(@Request() req) {
+    return this.inscripcionService.getInscripcionesPorEstudiante(req.user.userId);
   }
 
   // Ver detalle de una inscripción propia
