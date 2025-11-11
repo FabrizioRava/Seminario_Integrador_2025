@@ -50,19 +50,20 @@ interface Materia {
 interface Comision {
   id: number;
   nombre: string;
-  cupoDisponible: number;
   cupoMaximo: number;
+  cupoDisponible: number;
   docente?: {
     nombre: string;
     apellido: string;
   };
+  horarios: Horario[];
+  materiaId?: number;
+  profesorId?: number;
+  inscripciones?: any[];
   profesor?: {
     nombre: string;
     apellido: string;
   };
-  horarios?: Horario[];
-  inscripciones?: Array<{ id: number }>;
-  cupo?: number;
 }
 
 interface Horario {
@@ -74,10 +75,14 @@ interface Horario {
 
 interface Inscripcion {
   id: number;
-  materia: Materia;
-  comision?: Comision;
-  estado?: string;
-  stc?: string;
+  materia: {
+    id: number;
+    nombre: string;
+    descripcion?: string;
+  };
+  comision: Comision;
+  estado: string;
+  stc: string;
   fechaInscripcion: string;
 }
 
@@ -123,67 +128,53 @@ export default function InscripcionesPage() {
 
   // Carga los datos iniciales de materias e inscripciones del usuario
   const fetchData = async () => {
-    if (!user?.planEstudio?.id) {
-      console.log('No hay usuario o plan de estudio válido');
+    if (!user?.id) {
+      console.log('No hay usuario autenticado');
       return;
     }
 
     try {
       console.log('Iniciando carga de datos...');
       setAuthError(null);
+      setLoading(true);
 
-      let materiasLoaded = false;
-
-      try {
-        // Usar el endpoint autenticado correcto (NO el público)
-        console.log('Cargando materias disponibles autenticadas...');
-        const materiasRes = await api.get('/inscripcion/materia/disponibles');
-
-        console.log('Respuesta completa de materias:', materiasRes);
-        console.log('Datos de materias:', materiasRes.data);
-        console.log('Cantidad de materias recibidas:', Array.isArray(materiasRes.data) ? materiasRes.data.length : 'No es array');
-
-        const materiasData = materiasRes.data || [];
-        console.log('Materias procesadas para estado:', materiasData.length);
-        console.log('Primera materia (si existe):', materiasData[0]);
-
-        if (materiasData.length === 0) {
-          console.warn('⚠️ No se encontraron materias en el endpoint público');
-        }
-
-        setMateriasDisponibles(Array.isArray(materiasData) ? materiasData : []);
-        materiasLoaded = true;
-      } catch (error) {
-        console.error('Error al cargar materias del plan:', error);
-        if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
-          console.log(`Error ${error.response?.status} - Problema de permisos`);
-          console.log('Detalles del error:', error.response?.data);
-          logout();
-          return;
-        } else {
-          console.error('Error no relacionado con autenticación:', (error as Error)?.message || 'Error desconocido');
-          setMateriasDisponibles([]);
-        }
-      // Cargar inscripciones actuales del usuario (datos locales para desarrollo)
+      // Cargar inscripciones actuales
       try {
         console.log('Cargando inscripciones actuales...');
-        // Para desarrollo, usar datos locales vacíos inicialmente
-        setMisInscripciones([]);
+        const inscripcionesRes = await api.get('/inscripcion/mis-inscripciones');
+        console.log('Inscripciones cargadas:', inscripcionesRes.data);
+        setMisInscripciones(inscripcionesRes.data || []);
       } catch (error) {
         console.error('Error al cargar inscripciones actuales:', error);
         setMisInscripciones([]);
+        
+        if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
+          console.log(`Error ${error.response?.status} - Problema de permisos`);
+          logout();
+          return;
+        }
       }
 
-      // Después de cargar ambas listas, dejar todas las materias disponibles
-      // El filtrado por correlativas se hará en el momento de la inscripción
-    }
-
+      // Cargar materias disponibles
+      try {
+        console.log('Cargando materias disponibles...');
+        const materiasRes = await api.get('/inscripcion/materia/disponibles');
+        const materiasData = materiasRes.data || [];
+        console.log('Materias disponibles:', materiasData);
+        
+        // Filtrar materias para excluir aquellas en las que ya está inscripto
+        const materiasFiltradas = materiasData.filter((materia: any) => 
+          !misInscripciones.some(insc => insc.materia.id === materia.id)
+        );
+        
+        setMateriasDisponibles(materiasFiltradas);
+      } catch (error) {
+        console.error('Error al cargar materias disponibles:', error);
+        setMateriasDisponibles([]);
+      }
     } catch (error) {
       console.error('Error general al cargar datos:', error);
-      // Si hay errores 401, ya se manejaron arriba con logout()
-      if (!axios.isAxiosError(error) || error.response?.status !== 401) {
-        setAuthError('Error inesperado al cargar la página. Intenta nuevamente.');
-      }
+      setAuthError('Error al cargar los datos. Por favor, intenta de nuevo.');
     } finally {
       setLoading(false);
       console.log('Carga de datos finalizada');
@@ -240,27 +231,56 @@ export default function InscripcionesPage() {
       return;
     }
 
-    // Para desarrollo, mostrar mensaje de éxito sin hacer llamada real
-    toast({
-      title: "Éxito",
-      description: `Te has inscrito correctamente a ${selectedMateria.nombre}`,
-    });
+    try {
+      setLoading(true);
+      
+      // Realizar la inscripción en el backend
+      await api.post(`/inscripcion/materia/${selectedMateria.id}`, {
+        comisionId: parseInt(selectedComision)
+      });
 
-    setShowModal(false);
-    setSelectedMateria(null);
-    setSelectedComision('');
+      // Actualizar la lista de inscripciones
+      const inscripcionesRes = await api.get('/inscripcion/mis-inscripciones');
+      setMisInscripciones(inscripcionesRes.data || []);
 
-    // Actualizar las inscripciones locales para mostrar la nueva inscripción
-    const nuevaInscripcion: Inscripcion = {
-      id: Date.now(), // ID temporal
-      materia: selectedMateria,
-      comision: selectedMateria.comisiones?.find(c => c.id === parseInt(selectedComision)),
-      estado: 'CONFIRMADA',
-      stc: 'CURSANDO',
-      fechaInscripcion: new Date().toISOString(),
-    };
+      // Actualizar la lista de materias disponibles
+      const materiasRes = await api.get('/inscripcion/materia/disponibles');
+      const materiasData = materiasRes.data || [];
+      
+      // Filtrar materias para excluir aquellas en las que ya está inscripto
+      const materiasFiltradas = materiasData.filter((materia: any) => 
+        !inscripcionesRes.data.some((insc: any) => insc.materia.id === materia.id)
+      );
+      
+      setMateriasDisponibles(materiasFiltradas);
 
-    setMisInscripciones(prev => [...prev, nuevaInscripcion]);
+      // Mostrar mensaje de éxito
+      toast({
+        title: "¡Inscripción exitosa!",
+        description: `Te has inscripto correctamente a ${selectedMateria.nombre}`,
+      });
+
+      // Cerrar el modal y limpiar selección
+      setShowModal(false);
+      setSelectedMateria(null);
+      setSelectedComision('');
+      
+    } catch (error) {
+      console.error('Error al realizar la inscripción:', error);
+      
+      let errorMessage = 'Ocurrió un error al realizar la inscripción';
+      if (axios.isAxiosError(error) && error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      }
+      
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Cancela una inscripción existente
@@ -315,16 +335,8 @@ export default function InscripcionesPage() {
 
   // Formatea la información de cupo de una comisión
   const formatCupo = (comision: Comision) => {
-    if (
-      typeof comision.cupoDisponible === 'number' &&
-      typeof comision.cupoMaximo === 'number'
-    ) {
-      return `${comision.cupoDisponible}/${comision.cupoMaximo}`;
-    }
-
-    if (typeof comision.cupo === 'number') {
-      const usados = comision.inscripciones?.length ?? 0;
-      return `${usados}/${comision.cupo}`;
+    if (comision.cupoDisponible !== undefined && comision.cupoMaximo !== undefined) {
+      return `${comision.cupoDisponible}/${comision.cupoMaximo} cupos`;
     }
 
     if (comision.inscripciones) {
@@ -355,6 +367,7 @@ export default function InscripcionesPage() {
       {/* Contenido principal cuando no está cargando */}
       {!authLoading && user && (
         <>
+          {/* Barra superior */}
           <div className="bg-white shadow-sm border-b">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <div className="flex justify-between items-center py-6">
@@ -372,6 +385,7 @@ export default function InscripcionesPage() {
             </div>
           </div>
 
+          {/* Contenido principal */}
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             {authError ? (
               <div className="bg-red-50 border border-red-200 rounded-md p-6 text-center">
@@ -392,64 +406,97 @@ export default function InscripcionesPage() {
                   >
                     Limpiar Sesión
                   </Button>
-                  <Button onClick={handleGoToLogin} variant="outline">
-                    Ir al Login
-                  </Button>
                 </div>
               </div>
             ) : (
-              <>
-                <div className="mb-8">
-                  <h2 className="text-xl font-semibold text-gray-900 mb-4">Mis Inscripciones Actuales</h2>
+              <div className="space-y-8">
+                {/* Sección de Mis Inscripciones */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-2xl font-bold text-gray-900">Mis Materias</h2>
+                    <Badge variant="outline" className="bg-blue-100 text-blue-800">
+                      {misInscripciones.length} {misInscripciones.length === 1 ? 'materia' : 'materias'}
+                    </Badge>
+                  </div>
+
                   {misInscripciones.length === 0 ? (
-                    <Card>
-                      <CardContent className="text-center py-8">
-                        <BookOpen className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                        <p className="text-gray-600">No tienes inscripciones activas</p>
-                      </CardContent>
-                    </Card>
+                    <div className="bg-white rounded-lg border border-gray-200 p-6 text-center">
+                      <BookOpen className="h-12 w-12 mx-auto text-gray-400 mb-4" />
+                      <h3 className="text-lg font-medium text-gray-900">No estás inscripto a ninguna materia</h3>
+                      <p className="mt-1 text-sm text-gray-500">
+                        Busca materias en la sección de abajo para comenzar a inscribirte.
+                      </p>
+                    </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="grid gap-4">
                       {misInscripciones.map((inscripcion) => (
-                        <Card key={inscripcion.id}>
-                          <CardHeader>
-                            <div className="flex justify-between items-start">
+                        <Card key={inscripcion.id} className="border-l-4 border-blue-500">
+                          <CardHeader className="p-4">
+                            <div className="flex items-start justify-between">
                               <div>
                                 <CardTitle className="text-lg">{inscripcion.materia.nombre}</CardTitle>
-                                <CardDescription>{inscripcion.comision?.nombre || 'Sin comisión asignada'}</CardDescription>
+                                <CardDescription className="mt-1">
+                                  Comisión: {inscripcion.comision.nombre}
+                                </CardDescription>
                               </div>
-                              {getEstadoBadge(inscripcion)}
+                              <Badge 
+                                variant={
+                                  inscripcion.estado === 'CONFIRMADA' || inscripcion.stc === 'CURSANDO' 
+                                    ? 'default' 
+                                    : 'secondary'
+                                }
+                              >
+                                {inscripcion.estado || inscripcion.stc || 'PENDIENTE'}
+                              </Badge>
                             </div>
                           </CardHeader>
-                          <CardContent>
-                            <div className="space-y-2 text-sm">
-                              {renderComisionDocente(inscripcion.comision)}
-                              {inscripcion.comision?.horarios?.map((horario, idx) => (
-                                <div key={idx} className="flex items-center gap-2">
-                                  <Clock className="h-4 w-4 text-gray-400" />
-                                  <span>
-                                    {horario.dia} {horario.horaInicio} - {horario.horaFin}
-                                  </span>
-                                </div>
-                              ))}
-                              <div className="flex items-center gap-2">
-                                <Calendar className="h-4 w-4 text-gray-400" />
+                          <CardContent className="p-4 pt-0">
+                            {/* Información del docente */}
+                            {inscripcion.comision.docente && (
+                              <div className="flex items-center text-sm text-gray-600 mb-3">
+                                <Users className="h-4 w-4 mr-2 text-gray-400" />
                                 <span>
-                                  Inscrito el {new Date(inscripcion.fechaInscripcion).toLocaleDateString('es-AR')}
+                                  Docente: {inscripcion.comision.docente.nombre} {inscripcion.comision.docente.apellido}
                                 </span>
                               </div>
-                            </div>
-                            {canCancelInscripcion(inscripcion) && (
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                className="w-full mt-4"
-                                onClick={() => handleCancelarInscripcion(inscripcion.id)}
-                              >
-                                <X className="h-4 w-4 mr-2" />
-                                Cancelar Inscripción
-                              </Button>
                             )}
+                            
+                            {/* Horarios */}
+                            <div className="space-y-2">
+                              <h4 className="text-sm font-medium text-gray-700">Horarios:</h4>
+                              {inscripcion.comision.horarios && inscripcion.comision.horarios.length > 0 ? (
+                                <div className="grid gap-2">
+                                  {inscripcion.comision.horarios.map((horario, index) => (
+                                    <div key={index} className="flex items-center text-sm text-gray-600 bg-gray-50 p-2 rounded">
+                                      <Clock className="h-4 w-4 mr-2 text-gray-400" />
+                                      <span className="font-medium">{horario.dia}:</span>
+                                      <span className="mx-1">{horario.horaInicio} - {horario.horaFin}</span>
+                                      {horario.aula && (
+                                        <span className="ml-2 text-gray-500">(Aula: {horario.aula})</span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-sm text-gray-500 italic">Sin horarios asignados</div>
+                              )}
+                            </div>
+
+                            <div className="mt-4 flex justify-between items-center">
+                              <div className="text-sm text-gray-500">
+                                Fecha de inscripción: {new Date(inscripcion.fechaInscripcion).toLocaleDateString()}
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleCancelarInscripcion(inscripcion.id)}
+                                className="text-red-600 border-red-200 hover:bg-red-50"
+                                disabled={!canCancelInscripcion(inscripcion)}
+                              >
+                                <X className="h-4 w-4 mr-1" />
+                                Dar de baja
+                              </Button>
+                            </div>
                           </CardContent>
                         </Card>
                       ))}
@@ -457,6 +504,7 @@ export default function InscripcionesPage() {
                   )}
                 </div>
 
+                {/* Sección de Materias Disponibles */}
                 <div>
                   <div className="flex justify-between items-center mb-4">
                     <h2 className="text-xl font-semibold text-gray-900">Materias Disponibles</h2>
@@ -532,7 +580,7 @@ export default function InscripcionesPage() {
                     </div>
                   )}
                 </div>
-              </>
+              </div>
             )}
           </div>
 
@@ -589,9 +637,9 @@ export default function InscripcionesPage() {
                                 <SelectItem
                                   key={comision.id}
                                   value={comision.id.toString()}
-                                  disabled={typeof comision.cupoDisponible === 'number' && comision.cupoDisponible === 0}
+                                  disabled={comision.cupoDisponible === 0}
                                 >
-                                  {comision.nombre} ({formatCupo(comision)})
+                                  {comision.nombre} ({comision.cupoDisponible}/{comision.cupoMaximo} cupos disponibles)
                                 </SelectItem>
                               ))}
                             </SelectContent>
