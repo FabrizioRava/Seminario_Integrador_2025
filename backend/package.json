@@ -41,6 +41,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
     "dotenv": "^16.0.0",
+    "helmet": "^8.1.0",
     "passport": "^0.6.0",
     "passport-jwt": "^4.0.0",
     "pg": "^8.8.0",
@@ -82,8 +83,12 @@
       "json",
       "ts"
     ],
-    "rootDir": "src",
-    "testRegex": ".*\\.spec\\.ts$",
+    "rootDir": ".",
+    "testRegex": ".*\\.(spec|e2e-spec)\\.ts$",
+    "roots": [
+      "<rootDir>/src",
+      "<rootDir>/test"
+    ],
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
@@ -100,12 +105,12 @@
       "!**/cursada/**",
       "!**/examen-final/**"
     ],
-    "coverageDirectory": "../coverage",
+    "coverageDirectory": "coverage",
     "testEnvironment": "node",
     "testTimeout": 10000,
     "maxWorkers": 1,
     "setupFilesAfterEnv": [
-      "<rootDir>/../test/test-setup.ts"
+      "<rootDir>/test/test-setup.ts"
     ]
   }
 }

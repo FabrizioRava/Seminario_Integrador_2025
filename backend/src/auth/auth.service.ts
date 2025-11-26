@@ -67,6 +67,8 @@ export class AuthService {
       legajo: fullUser.legajo,
       rol: fullUser.rol,
       planEstudio: fullUser.planEstudio,
+      dni: fullUser.dni,
+      createdAt: fullUser.createdAt,
     };
 
     return { access_token, user: userResponse };
