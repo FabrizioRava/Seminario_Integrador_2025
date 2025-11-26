@@ -1,81 +1,111 @@
+
 // src/examen/examen.service.ts
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, In } from 'typeorm';
 import { ExamenFinal } from './entities/examen.entity';
 import { Materia } from '../materia/entities/materia.entity';
 import { User } from '../user/entities/user.entity';
 import { Inscripcion } from '../inscripcion/entities/inscripcion.entity';
 
-// ✅ Definimos un tipo explícito para las correlativas faltantes
 interface CorrelativaFaltante {
   id: number;
   nombre: string;
 }
 
+// Estados permitidos; evita valores arbitrarios desde el cliente.
+const ESTADOS_PERMITIDOS = new Set<('inscripto' | 'aprobado' | 'desaprobado' | 'ausente')>([
+  'inscripto',
+  'aprobado',
+  'desaprobado',
+  'ausente',
+]);
+
 @Injectable()
 export class ExamenService {
   constructor(
     @InjectRepository(ExamenFinal)
-    private examenRepo,
+    private readonly examenRepo: Repository<ExamenFinal>,
     @InjectRepository(Materia)
-    private materiaRepo,
+    private readonly materiaRepo: Repository<Materia>,
     @InjectRepository(User)
-    private userRepo,
+    private readonly userRepo: Repository<User>,
     @InjectRepository(Inscripcion)
-    private inscripcionRepo,
+    private readonly inscripcionRepo: Repository<Inscripcion>,
   ) {}
 
-  // Verificar si el estudiante cumple con las correlativas para rendir el final
+  /**
+   * Verifica correlativas del final de manera robusta.
+   * Devuelve faltantes con id y nombre. Evita N+1 con consulta In() si es posible.
+   */
   private async verificarCorrelativasFinal(
     estudianteId: number,
     materiaId: number,
-  ): Promise<{ 
-    cumple: boolean; 
-    faltantes: CorrelativaFaltante[] // ✅ Cambiado a no opcional
-  }> {
-    const estudiante = await this.userRepo.findOne({ where: { id: estudianteId } });
-    const materia = await this.materiaRepo.findOne({
-      where: { id: materiaId },
-      relations: ['correlativasFinal'],
-    });
+  ): Promise<{ cumple: boolean; faltantes: CorrelativaFaltante[] }> {
+    if (!Number.isInteger(estudianteId) || !Number.isInteger(materiaId)) {
+      throw new BadRequestException('Parámetros inválidos');
+    }
+
+    const [estudiante, materia] = await Promise.all([
+      this.userRepo.findOne({ where: { id: estudianteId } }),
+      this.materiaRepo.findOne({
+        where: { id: materiaId },
+        relations: ['correlativasFinal'],
+      }),
+    ]);
 
     if (!estudiante || !materia) {
       throw new BadRequestException('Estudiante o materia no encontrados');
     }
 
-    if (!materia.correlativasFinal || materia.correlativasFinal.length === 0) {
-      // ✅ Siempre retornamos un array de faltantes (vacío si no hay)
+    const correlativas = materia.correlativasFinal ?? [];
+    if (correlativas.length === 0) {
       return { cumple: true, faltantes: [] };
     }
 
-    // ✅ Definimos explícitamente el tipo del array
-    const faltantes: CorrelativaFaltante[] = [];
-    
-    for (const correlativa of materia.correlativasFinal) {
-      const inscripcion = await this.inscripcionRepo.findOne({
-        where: {
-          estudiante: { id: estudianteId },
-          materia: { id: correlativa.id },
-        },
-      });
+    const correlativaIds = correlativas.map((c) => c.id);
 
-      // Para rendir final, la correlativa debe estar aprobada
-      const estadoValido = inscripcion && inscripcion.stc === 'aprobada';
-      
-      if (!estadoValido) {
-        // ✅ TypeScript ahora sabe que faltantes es CorrelativaFaltante[]
+    // Buscar todas las inscripciones a correlativas en una sola query
+    const inscripciones = await this.inscripcionRepo.find({
+      where: {
+        estudiante: { id: estudianteId },
+        materia: { id: In(correlativaIds) },
+      },
+      relations: ['materia'],
+    });
+
+    const aprobadasPorId = new Set(
+      inscripciones
+        .filter((i) => i.stc === 'aprobada' /* ajustar si el campo/valor difiere */)
+        .map((i) => i.materia.id),
+    );
+
+    const faltantes: CorrelativaFaltante[] = [];
+    for (const correlativa of correlativas) {
+      if (!aprobadasPorId.has(correlativa.id)) {
         faltantes.push({ id: correlativa.id, nombre: correlativa.nombre });
       }
     }
 
-    return {
-      cumple: faltantes.length === 0,
-      faltantes, // ✅ Siempre es un array
-    };
+    return { cumple: faltantes.length === 0, faltantes };
   }
 
-  // Inscribirse a un examen final
+  /**
+   * Inscripción a examen final con validaciones:
+   * - No duplicar inscripción
+   * - Correlativas completas
+   * - Estado inicial seguro
+   */
   async inscribirse(userId: number, materiaId: number): Promise<ExamenFinal> {
+    if (!Number.isInteger(userId) || !Number.isInteger(materiaId)) {
+      throw new BadRequestException('Parámetros inválidos');
+    }
+
     const estudiante = await this.userRepo.findOne({ where: { id: userId } });
     const materia = await this.materiaRepo.findOne({ where: { id: materiaId } });
 
@@ -83,7 +113,6 @@ export class ExamenService {
       throw new BadRequestException('Estudiante o materia no encontrados');
     }
 
-    // Evitar inscripciones duplicadas
     const yaInscripto = await this.examenRepo.findOne({
       where: { estudiante: { id: estudiante.id }, materia: { id: materia.id } },
     });
@@ -91,58 +120,111 @@ export class ExamenService {
       throw new BadRequestException('Ya estás inscripto al examen final de esta materia');
     }
 
-    // Validar correlativas
     const { cumple, faltantes } = await this.verificarCorrelativasFinal(userId, materiaId);
     if (!cumple) {
-      // ✅ Ahora TypeScript sabe que faltantes siempre está definido
-      const materiasFaltantes = faltantes.map(m => m.nombre).join(', ');
+      const materiasFaltantes = faltantes.map((m) => m.nombre).join(', ');
       throw new BadRequestException(
-        `No puedes rendir el final de esta materia. Faltan correlativas: ${materiasFaltantes}`
+        `No puedes rendir el final. Faltan correlativas: ${materiasFaltantes}`,
       );
     }
 
-    const examen = this.examenRepo.create({ estudiante, materia, estado: 'inscripto' });
+    const examen = this.examenRepo.create({
+      estudiante,
+      materia,
+      estado: 'inscripto',
+      nota: null,
+    });
     return this.examenRepo.save(examen);
   }
 
-  // Verificar si un usuario es el jefe de cátedra del examen
+  /**
+   * Chequeo de jefe de cátedra para un examen dado.
+   */
   async esJefeDeCatedra(userId: number, examenId: number): Promise<boolean> {
+    if (!Number.isInteger(userId) || !Number.isInteger(examenId)) return false;
+
+    const examen = await this.examenRepo.findOne({
+      where: { id: examenId },
+      relations: ['materia', 'materia.jefeCatedra'],
+      select: {
+        id: true,
+        materia: { id: true, jefeCatedra: { id: true } },
+      } as any,
+    });
+
+    return examen ? examen.materia.jefeCatedra?.id === userId : false;
+  }
+
+  /**
+   * Lógica de autorización centralizada para el guard.
+   * Lanza 404 si el examen no existe, 403 si no es jefe de cátedra.
+   */
+  async assertJefeDeCatedra(userId: number, examenId: number): Promise<void> {
+    if (!Number.isInteger(userId) || !Number.isInteger(examenId)) {
+      throw new BadRequestException('Parámetros inválidos');
+    }
+
     const examen = await this.examenRepo.findOne({
       where: { id: examenId },
       relations: ['materia', 'materia.jefeCatedra'],
     });
 
-    if (!examen) return false;
+    if (!examen) {
+      throw new NotFoundException('Examen no encontrado');
+    }
 
-    return examen.materia.jefeCatedra?.id === userId;
+    if (examen.materia.jefeCatedra?.id !== userId) {
+      throw new ForbiddenException('No tienes permisos para esta operación');
+    }
   }
 
-  // Cargar nota del examen (solo jefe de cátedra)
-  async cargarNota(examenId: number, nota: number, estado: string): Promise<ExamenFinal> {
+  /**
+   * Carga de nota asegurando:
+   * - Usuario autorizado (jefe de cátedra de la materia del examen).
+   * - Nota válida [0..10].
+   * - Estado permitido.
+   * - Persistencia consistente.
+   */
+  async cargarNota(
+    userId: number,
+    examenId: number,
+    nota: number,
+    estado: 'aprobado' | 'desaprobado' | 'ausente',
+  ): Promise<ExamenFinal> {
+    if (!Number.isInteger(examenId) || !Number.isFinite(nota) || nota < 0 || nota > 10) {
+      throw new BadRequestException('Datos inválidos: examenId/nota');
+    }
+
+    if (!ESTADOS_PERMITIDOS.has(estado) || estado === 'inscripto') {
+      throw new BadRequestException('Estado inválido');
+    }
+
+    // Autorización centralizada
+    await this.assertJefeDeCatedra(userId, examenId);
+
     const examen = await this.examenRepo.findOne({
       where: { id: examenId },
-      relations: ['materia', 'materia.jefeCatedra', 'estudiante'],
+      relations: ['materia', 'estudiante'],
     });
 
-    if (!examen) {
-      throw new BadRequestException('Examen no encontrado');
-    }
-
-    // Validar rango de nota
-    if (nota < 0 || nota > 10) {
-      throw new BadRequestException('La nota debe estar entre 0 y 10');
-    }
+    if (!examen) throw new NotFoundException('Examen no encontrado');
 
     examen.nota = nota;
     examen.estado = estado;
     return this.examenRepo.save(examen);
   }
 
-  // Ver exámenes del estudiante
+  /**
+   * Listado para el estudiante: solo campos necesarios y ordenado.
+   */
   async verExamenes(userId: number): Promise<ExamenFinal[]> {
+    if (!Number.isInteger(userId)) throw new BadRequestException('ID inválido');
+
     return this.examenRepo.find({
       where: { estudiante: { id: userId } },
       relations: ['materia'],
+      // Evitamos exponer PII del estudiante. La materia se devuelve con lo básico.
+      select: ['id', 'estado', 'nota', 'createdAt', 'updatedAt'] as any,
       order: { id: 'DESC' },
     });
   }

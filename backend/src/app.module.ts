@@ -1,3 +1,4 @@
+
 // src/app.module.ts
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -20,6 +21,11 @@ import { InscripcionExamenModule } from './inscripcion-examen/inscripcion-examen
 import { InscripcionModule } from './inscripcion/inscripcion.module';
 import { EstadisticasModule } from './estadisticas/estadisticas.module';
 import { AsistenciaModule } from './asistencia/asistencia.module';
+
+import { APP_GUARD, APP_FILTER } from '@nestjs/core';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { RolesGuard } from './auth/roles.guard';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 @Module({
   imports: [
@@ -45,6 +51,13 @@ import { AsistenciaModule } from './asistencia/asistencia.module';
     InscripcionExamenModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // Guards globales (opcional). Si preferís por controlador, eliminá estas líneas.
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
+    // Filtro global para respuesta homogénea y segura.
+    { provide: APP_FILTER, useClass: AllExceptionsFilter },
+  ],
 })
 export class AppModule {}

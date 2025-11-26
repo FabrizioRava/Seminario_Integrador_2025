@@ -75,21 +75,17 @@ export class InscripcionService {
       throw new BadRequestException('Estudiante o materia no encontrados');
     }
 
-    // Validación de departamento: la materia debe ser del departamento del estudiante o "Básicas"
-    const basicas = await this.departamentoRepo.findOne({ where: { nombre: 'Básicas' } });
-    const materiaInfo = await this.materiaRepo
+    // Verificar que la materia esté en el plan de estudios del estudiante (igual que en materiasDisponibles)
+    const materiaEnPlan = await this.materiaRepo
       .createQueryBuilder('materia')
-      .leftJoinAndSelect('materia.departamento', 'departamento')
-      .leftJoinAndSelect('materia.relacionesConPlanes', 'relacion')
-      .leftJoinAndSelect('relacion.planEstudio', 'plan')
-      .leftJoinAndSelect('plan.carrera', 'carrera')
+      .innerJoin('materia.relacionesConPlanes', 'relacion', 'relacion.planEstudioId = :planId', {
+        planId: (estudiante as any)?.planEstudio?.id,
+      })
       .where('materia.id = :materiaId', { materiaId })
       .getOne();
 
-    const perteneceACarrera = !!materiaInfo?.relacionesConPlanes?.some(r => r.planEstudio?.carrera?.id === (estudiante as any)?.planEstudio?.carrera?.id);
-    const esBasicas = materiaInfo?.departamento?.id === basicas?.id;
-    if (!perteneceACarrera && !esBasicas) {
-      throw new BadRequestException('No puedes inscribirte a esta materia. No pertenece a tu departamento.');
+    if (!materiaEnPlan) {
+      throw new BadRequestException('No puedes inscribirte a esta materia. No está en tu plan de estudios.');
     }
 
     const correlativas = await this.correlativasService.verificarCorrelativasCursada(userId, materiaId);

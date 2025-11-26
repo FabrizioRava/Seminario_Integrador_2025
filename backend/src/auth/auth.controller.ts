@@ -1,37 +1,32 @@
-// src/auth/auth.controller.ts
-import { Controller, Post, Body, UseGuards, Get, Request } from '@nestjs/common';
+
+import { Controller, Post, Body, UseGuards, Get, Request, UsePipes } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { SanitizePipe } from '../common/pipes/sanitize.pipe';
+import { LoginDto } from './dto/login.dto';
+import { RegisterTestDto } from './dto/register-test.dto';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
-  async login(@Body() loginDto: { legajo?: string; email?: string; password: string }) {
+  @UsePipes(SanitizePipe)
+  async login(@Body() loginDto: LoginDto) {
     if (!loginDto.legajo && !loginDto.email) {
       return { error: 'Se requiere email o legajo' };
     }
-
-    try {
-      const identifier = loginDto.email ?? loginDto.legajo!;
-      const result = await this.authService.login(identifier, loginDto.password);
-      if (!result) {
-        return { error: 'Credenciales inválidas' };
-      }
-      return result;
-    } catch (error) {
-      return {
-        error: error.message || 'Error al iniciar sesión',
-        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-      };
+    const identifier = loginDto.email ?? loginDto.legajo!;
+    const result = await this.authService.login(identifier, loginDto.password);
+    if (!result) {
+      return { error: 'Credenciales inválidas' };
     }
+    return result;
   }
 
-  // Endpoint temporal para crear usuario de prueba (solo desarrollo)
   @Post('register-test')
-  async registerTest(@Body() userDto: { nombre: string; apellido: string; email: string; legajo: string; password: string }) {
-    // Crear usuario de prueba para desarrollo
+  @UsePipes(SanitizePipe)
+  async registerTest(@Body() userDto: RegisterTestDto) {
     return {
       message: 'Usuario de prueba creado',
       user: {
@@ -46,10 +41,8 @@ export class AuthController {
     };
   }
 
-  // 🔒 Endpoint protegido
   @UseGuards(JwtAuthGuard)
   @Get('profile')
   getProfile(@Request() req) {
     return req.user;
-  }
-}
+  } } 

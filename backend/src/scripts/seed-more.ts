@@ -23,16 +23,36 @@ async function seedMore() {
     // Ensure Programación I materia
     let materiaProg = (await qr.query('SELECT id FROM "materia" WHERE nombre=$1', ['Programación I']))?.[0];
     if (!materiaProg) {
+      // Crear la materia
       const res = await qr.query(
         'INSERT INTO "materia" (nombre, descripcion, "departamentoId") VALUES ($1,$2,$3) RETURNING id',
         ['Programación I', 'Algoritmos y estructuras básicas', deptoSistemas.id]
       );
       materiaProg = res[0];
-      // link to plan_estudio in join table materia_planes_estudio
+    }
+    
+    // Asegurar que la materia esté en el plan de estudios
+    const materiaEnPlan = (await qr.query(
+      'SELECT 1 FROM "materia_planes_estudio" WHERE "materiaId" = $1 AND "planEstudioId" = $2',
+      [materiaProg.id, plan.id]
+    ))?.[0];
+    
+    if (!materiaEnPlan) {
+      // Asociar la materia al plan de estudios
       await qr.query(
-        'INSERT INTO "materia_planes_estudio" ("materiaId","planEstudioId","nivel") VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+        'INSERT INTO "materia_planes_estudio" ("materiaId", "planEstudioId", "nivel") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
         [materiaProg.id, plan.id, 1]
       );
+      
+      // Verificar que la asociación se creó correctamente
+      const asociacionCreada = (await qr.query(
+        'SELECT 1 FROM "materia_planes_estudio" WHERE "materiaId" = $1 AND "planEstudioId" = $2',
+        [materiaProg.id, plan.id]
+      ))?.[0];
+      
+      if (!asociacionCreada) {
+        throw new Error('No se pudo asociar la materia al plan de estudios');
+      }
     }
 
     // Ensure comision for Programación I
